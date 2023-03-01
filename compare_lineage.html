@@ -1,0 +1,463 @@
+<html>
+
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Amino thing</title>
+  <style>
+    html {
+      font-family: sans-serif;
+      background: #e6e7e8;
+    }
+
+    body {
+      margin: 0 auto;
+      max-width: 500px;
+      display: flex;
+      flex-direction: column;
+      align-content: center;
+      justify-content: center;
+      margin-bottom: 5em;
+    }
+
+    #position_input {
+      padding: 5px;
+      font-size: larger;
+      margin-top: 5px;
+    }
+
+    .card {
+      background: white;
+      padding: 10px;
+      margin-bottom: 10px;
+      box-shadow: 5px 5px 5px lightgrey;
+      text-align: center;
+      position: relative;
+    }
+
+    input {
+      margin: 1em;
+    }
+
+    button {
+      margin-top: 1em;
+      margin-bottom: 1em;
+    }
+
+    #result_table {
+      width: 100%;
+      text-align: center;
+      font-family: monospace;
+    }
+
+    .hidden{
+      display: none;
+    }
+  </style>
+  <script type="text/javascript" src="res/nc_045512.js"></script>
+  <script type="text/javascript" src="res/fastaParse.js"></script>
+  <script type="text/javascript" src="res/test_all.js"></script>
+</head>
+
+<body>
+
+  <div class="card">
+    <p>Caveats</p>
+    <p>
+      <ul>
+        <li>Deletions aren't modelled</li>
+        <li>Recombinants are broken</li>
+      </ul>
+    </p>
+  </div>
+
+  <div class="card">
+    <p>Input sequence</p>
+    <button onclick="document.getElementById('seq_input').value = nc_045512">Example</button>
+    <textarea id="seq_input" style="width: 100%; height: 10em"></textarea>
+  </div>
+
+  <div class="card">
+    <p>Lineage to compare to</p>
+    <div>
+      <button onclick="document.getElementById('lineage_dropdown_input').value = this.innerText">B.1.1.529</button>
+      <button onclick="document.getElementById('lineage_dropdown_input').value = this.innerText">BA.1</button>
+      <button onclick="document.getElementById('lineage_dropdown_input').value = this.innerText">BA.2.75</button>
+      <button onclick="document.getElementById('lineage_dropdown_input').value = this.innerText">BA.5</button>
+    </div>
+    <input list="lineage_dropdown" id="lineage_dropdown_input">
+    <datalist id="lineage_dropdown" />
+  </div>
+
+  <div class="card">
+    <p>Go</p>
+    <button onclick="compare_form_inputs()">Go</button>
+  </div>
+
+  <div class="card">
+    <p>Result</p>
+    <button onclick="colour_aa_by_cinema()">CINEMA colours</button>
+    <button onclick="toggle_hide_x()">Toggle hide X</button>
+    <div id="result_div"></div>
+  </div>
+
+</body>
+<script>
+  'use strict';
+
+  const region_to_pos_dict = {
+    "ORF1a": [266 - 3, 13483],
+    "ORF1b": [13468 - 3, 21555],
+    "S": [21563 - 3, 25384],
+    "ORF3a": [25393 - 3, 26220],
+    "E": [26245 - 3, 26472],
+    "M": [26523 - 3, 27191],
+    "ORF6": [27202 - 3, 27387],
+    "ORF7a": [27394 - 3, 27759],
+    "ORF7b": [27756 - 3, 27887],
+    "ORF8": [27894 - 3, 28259],
+    "N": [28274 - 3, 29533],
+    "ORF10": [29558 - 3, 29674]
+  }
+
+  const codon_to_amino_acid_dict = {
+    'TTT': 'F', 'TTC': 'F', 'TTA': 'L', 'TTG': 'L',
+    'CTT': 'L', 'CTC': 'L', 'CTA': 'L', 'CTG': 'L',
+    'ATT': 'I', 'ATC': 'I', 'ATA': 'I', 'ATG': 'M',
+    'GTT': 'V', 'GTC': 'V', 'GTA': 'V', 'GTG': 'V',
+    'TCT': 'S', 'TCC': 'S', 'TCA': 'S', 'TCG': 'S',
+    'CCT': 'P', 'CCC': 'P', 'CCA': 'P', 'CCG': 'P',
+    'ACT': 'T', 'ACC': 'T', 'ACA': 'T', 'ACG': 'T',
+    'GCT': 'A', 'GCC': 'A', 'GCA': 'A', 'GCG': 'A',
+    'TAT': 'Y', 'TAC': 'Y', 'TAA': '*', 'TAG': '*',
+    'CAT': 'H', 'CAC': 'H', 'CAA': 'Q', 'CAG': 'Q',
+    'AAT': 'N', 'AAC': 'N', 'AAA': 'K', 'AAG': 'K',
+    'GAT': 'D', 'GAC': 'D', 'GAA': 'E', 'GAG': 'E',
+    'TGT': 'C', 'TGC': 'C', 'TGA': '*', 'TGG': 'W',
+    'CGT': 'R', 'CGC': 'R', 'CGA': 'R', 'CGG': 'R',
+    'AGT': 'S', 'AGC': 'S', 'AGA': 'R', 'AGG': 'R',
+    'GGT': 'G', 'GGC': 'G', 'GGA': 'G', 'GGG': 'G'
+  }
+
+  // https://www.bioinformatics.nl/~berndb/aacolour.html
+  const amino_acid_chemical_properties_dict = {
+    'H': 'Polar positive',
+    'K': 'Polar positive',
+    'R': 'Polar positive',
+    'D': 'Polar negative',
+    'E': 'Polar negative',
+    'S': 'Polar neutral',
+    'T': 'Polar neutral',
+    'N': 'Polar neutral',
+    'Q': 'Polar neutral',
+    'A': 'Non-polar aliphatic',
+    'V': 'Non-polar aliphatic',
+    'L': 'Non-polar aliphatic',
+    'I': 'Non-polar aliphatic',
+    'M': 'Non-polar aliphatic',
+    'F': 'Non-polar aromatic_0',
+    'W': 'Non-polar aromatic_0',
+    'Y': 'Non-polar aromatic_0',
+    'P': 'Non-polar aromatic_1',
+    'G': 'Non-polar aromatic_1',
+    'C': 'Non-polar aromatic_2',
+    'B': 'Special characters',
+    'Z': 'Special characters',
+    'X': 'Special characters',
+    '-': 'Special characters'
+  }
+
+  // https://www.bioinformatics.nl/~berndb/aacolour.html
+  const chemical_properties_colour_scheme_dict = {
+    'Non-polar aliphatic': "gray",
+    'Non-polar aromatic_0': "magenta",
+    'Non-polar aromatic_1': "brown",
+    'Non-polar aromatic_2': "darkgoldenrod",
+    'Polar negative': "red",
+    'Polar neutral': "green",
+    'Polar positive': "blue",
+    'Special characters': "black"
+  }
+
+
+  function translate_aligned_seq(input_seq) {
+    `
+    Takes a SARS-CoV-2 sequence aligned to NC_045512 as input
+    Translates the sequence
+    Returns a dictionary of region:protein string
+    `
+    var region_protein_dict = {}
+
+    for (var region in region_to_pos_dict) {
+      var start = region_to_pos_dict[region][0] - 1
+      var end = region_to_pos_dict[region][1] - 1
+      var region_slice = input_seq.slice(start, end)
+      var protein_string = ""
+
+      for (var codon_idx = 0; codon_idx < region_slice.length; codon_idx += 3) {
+        var codon = region_slice.slice(codon_idx, codon_idx + 3)
+        var aa = codon_to_amino_acid_dict[codon] ? codon_to_amino_acid_dict[codon] : "X"
+        protein_string += aa
+      }
+
+      region_protein_dict[region] = protein_string
+    }
+
+    return region_protein_dict
+  }
+
+  function enumerate_translate_aligned_seq(input_seq) {
+    `
+    create output matching the get_flat_mutation_dict() format
+    which is a bit like running python enumerate() on the sequence from
+    translate_aligned_seq(), hence the function name
+    `
+    var return_dict = {}
+    var translated_seq = translate_aligned_seq(input_seq)
+
+    for (var gene in translated_seq) {
+      var seq = translated_seq[gene]
+      var temp_dict = {}
+
+      for (var i = 1; i < seq.length + 1; i++) { // index from 1
+        temp_dict[i.toString()] = seq[i]
+      }
+
+      return_dict[gene] = temp_dict
+    }
+
+    return return_dict
+  }
+
+  async function get_alias_key() {
+    fetch("res/alias_key.json")
+      .then(response => response.json())
+      .then(json => set_alias_key_global(json));
+  }
+
+  async function set_alias_key_global(in_json) {
+    alias_key = in_json
+  }
+
+  function unalias_lineage(input_lineage) {
+    var isWithdrawn = input_lineage[0] == "*"
+    var stem = input_lineage.split(".")[0].replace("*", "")
+    var rest_of_it = input_lineage.split(".").slice(1, input_lineage.split(".").length).join(".")
+
+    rest_of_it = rest_of_it.length ? "." + rest_of_it : ""
+
+    if (alias_key[stem] && (typeof (alias_key[stem]) == "string")) {
+      if (isWithdrawn) {
+        return "*" + alias_key[stem] + rest_of_it
+      }
+      else {
+        return alias_key[stem] + rest_of_it
+      }
+    }
+    else {
+      return input_lineage
+    }
+  }
+
+  function realias_lineage(input_lineage) {
+    var realiased_lineage = input_lineage
+
+    for (var alias in alias_key) {
+      var unaliased = alias_key[alias]
+      if (input_lineage.startsWith(unaliased + ".")) {
+        realiased_lineage = input_lineage.replace(unaliased, alias)
+      }
+    }
+
+    if (input_lineage == realiased_lineage) {
+      return realiased_lineage
+    }
+    else {
+      return realias_lineage(realiased_lineage) // recurse
+    }
+  }
+
+  function get_parent_lineage(input_lineage) {
+    `
+    Returns the parent lineage if there is one
+    Returns false if there isn't
+    Minor caveats documented in the function body
+    `
+    var unaliased = unalias_lineage(input_lineage)
+
+    // we stop if the unaliased lineage doesn't include a period
+    // this should mean we stop at lineage B for all B sublineages
+    // which is where we want to stop. That A exists is irrelevant
+    // should also work for recombinants, stopping at the parent
+    // A sublineages will return A
+    if (!unaliased.includes(".")) {
+      return false
+    }
+
+    else {
+      var unalised_split = unaliased.split(".")
+      var unalised_sliced = unalised_split.slice(0, unalised_split.length - 1)
+      var unalised_joined = unalised_sliced.join(".")
+      return realias_lineage(unalised_joined)
+    }
+  }
+
+  function compare_seq_to_lineage(input_seq, input_lineage) {
+    var a = enumerate_translate_aligned_seq(input_seq)
+    var b = get_flat_mutation_dict(input_lineage)
+
+    var return_tuple_array = []
+
+    for (var gene in region_to_pos_dict) {
+      for (var pos in a[gene]) {
+        var a_base = a[gene][pos]
+        var b_base = b[gene][pos]
+        if (a_base != b_base) {
+          return_tuple_array.push([gene, pos, a_base, b_base])
+        }
+      }
+    }
+
+    return return_tuple_array
+  }
+
+  function get_all_lineage_mutations(input_lineage) {
+    // for a given input lineage
+    // we need to get its associated mutations
+    // and those of all its parent lineages
+    // and we sort of have to ensure that the parent
+    // ones don't overwrite the child ones.
+    // that second bit we'll handle in a different function
+    var input_lineage_parent = input_lineage // init
+    var mutation_dict = {}
+
+    while (input_lineage_parent) {
+      var lineage_mutations_obj = lineage_mutations[input_lineage_parent]
+      
+      // only add if there is something to add
+      // else check the parent
+      if (lineage_mutations_obj){
+        mutation_dict[unalias_lineage(input_lineage_parent)] = lineage_mutations_obj
+      }
+      else{
+        console.warn("lineage", input_lineage_parent, "is not defined by any mutations over its parent lineages")
+      }
+
+      input_lineage_parent = get_parent_lineage(input_lineage_parent)
+    }
+
+    // error if we come back empty handed
+    if (!Object.values(mutation_dict)[0]) {
+      console.error("No mutations found for", input_lineage)
+      return
+    }
+
+    return mutation_dict
+  }
+
+  function get_flat_mutation_dict(input_lineage) {
+    var return_dict = {}
+    var mutation_dict = get_all_lineage_mutations(input_lineage)
+    var sorted_lineage_list = Object.keys(mutation_dict).sort()
+
+    for (var i = 0; i < sorted_lineage_list.length; i++) {
+      var lineage = sorted_lineage_list[i]
+      var lineage_mutation_dict = mutation_dict[lineage] // actually an array of objects
+      for (var j = 0; j < lineage_mutation_dict.length; j++) {
+        var gene = lineage_mutation_dict[j]["gene"]
+        var position = lineage_mutation_dict[j]["pos"].toString()
+        var alt = lineage_mutation_dict[j]["alt"]
+
+        var temp_dict = {}
+        temp_dict[position] = alt
+
+        if (!Object.keys(return_dict).includes(gene)) {
+          return_dict[gene] = temp_dict
+        }
+        else {
+          return_dict[gene] = Object.assign(return_dict[gene], temp_dict)
+        }
+      }
+    }
+
+    return return_dict
+  }
+
+  function init_lineage_dropdown() {
+    var dropdown_values = Object.keys(lineage_mutations).sort()
+
+    var dropdown_html = dropdown_values.map(x => `<option value='${x}' />`)
+
+    document.getElementById("lineage_dropdown").innerHTML = dropdown_html.join("\n")
+  }
+
+  function compare_form_inputs() {
+    var seq = document.getElementById("seq_input").value
+    var lineage = document.getElementById("lineage_dropdown_input").value.toUpperCase()
+    var comparison_array = compare_seq_to_lineage(seq, lineage)
+    var return_html = []
+    var header_row = `<tr><th>Gene</th><th>Pos</th><th>${lineage}</th><th>Input</th></tr>`
+    // var header_row = "<tr><th>Gene</th><th>Mutation</th></tr>"
+
+    return_html.push(header_row)
+
+    for (var i = 0; i < comparison_array.length; i++) {
+      var gene = comparison_array[i][0]
+      var pos = comparison_array[i][1]
+      var ref = comparison_array[i][3] // the reference lineage
+      var alt = comparison_array[i][2] // the input sequence
+      // var formatted_mutation = ref + pos.toString() + alt
+
+      if (!(ref && alt)) { // if the pos is undefined then just ignore
+        continue
+      }
+
+      if ((ref == "*") && (alt == "X")) { // ignore missing data
+        continue
+      }
+
+      return_html.push(`<tr><td>${gene}</td><td>${pos}</td><td>${ref}</td><td>${alt}</td></tr>`)
+      // return_html.push(`<tr><td>${gene}</td><td>${formatted_mutation}</td></tr>`)
+    }
+
+    return_html = "<table id='result_table'>\n" + return_html.join("\n") + "\n</table>"
+
+    document.getElementById("result_div").innerHTML = return_html
+  }
+
+  function colour_aa_by_cinema() {
+    for (var i = 1; i < document.getElementById("result_table").rows.length; i++) {
+      var aa = document.getElementById("result_table").rows[i].cells[2].innerText
+      var aa_props = amino_acid_chemical_properties_dict[aa]
+      var aa_colour = chemical_properties_colour_scheme_dict[aa_props]
+      document.getElementById("result_table").rows[i].cells[2].style.color = aa_colour
+
+      var aa = document.getElementById("result_table").rows[i].cells[3].innerText
+      var aa_props = amino_acid_chemical_properties_dict[aa]
+      var aa_colour = chemical_properties_colour_scheme_dict[aa_props]
+      document.getElementById("result_table").rows[i].cells[3].style.color = aa_colour
+    }
+  }
+
+  function toggle_hide_x(){
+    for (var i = 1; i < document.getElementById("result_table").rows.length; i++) {
+      var aa = document.getElementById("result_table").rows[i].cells[3].innerText
+      if (aa == 'X'){
+        document.getElementById("result_table").rows[i].classList.toggle("hidden")
+      }
+    }
+  }
+
+  // globals
+  const ref_protein_seq = translate_aligned_seq(nc_045512);
+  var alias_key
+
+  function init() {
+    // init stuff goes here
+    get_alias_key();
+    init_lineage_dropdown();
+  }
+
+  init();
+</script>
+
+</html>

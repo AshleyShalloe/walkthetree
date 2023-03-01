@@ -1,0 +1,272 @@
+<html>
+
+<head>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nucleotides thing</title>
+    <style>
+        html {
+            font-family: sans-serif;
+            background: #e6e7e8;
+        }
+
+        body {
+            margin: 0 auto;
+            max-width: 700px;
+            display: flex;
+            flex-direction: column;
+            align-content: center;
+            justify-content: center;
+            margin-bottom: 5em;
+        }
+
+        #position_input {
+            padding: 5px;
+            font-size: larger;
+            margin-top: 5px;
+        }
+
+        .card {
+            background: white;
+            padding: 10px;
+            margin-bottom: 10px;
+            box-shadow: 5px 5px 5px lightgrey;
+            text-align: center;
+            position: relative;
+        }
+
+        input {
+            margin: 1em;
+        }
+
+        button {
+            margin-top: 1em;
+            margin-bottom: 1em;
+        }
+
+        #result_table {
+            width: 100%;
+            text-align: center;
+            font-family: monospace;
+        }
+
+        .hidden {
+            display: none;
+        }
+    </style>
+    <script type="text/javascript" src="res/nc_045512.js"></script>
+    <script type="text/javascript" src="res/fastaParse.js"></script>
+    <script type="text/javascript" src="res/test_all_nt.js"></script>
+</head>
+
+<body>
+
+    <div class="card">
+        <p>Caveats</p>
+        <p>
+            <ul>
+                <li>Deletions aren't modelled</li>
+                <li>Recombinants are broken</li>
+            </ul>
+        </p>
+    </div>
+
+    <div class="card">
+        <p>Lineage to get</p>
+        <div>
+            <button
+                onclick="document.getElementById('lineage_dropdown_input').value = this.innerText">B.1.1.529</button>
+            <button onclick="document.getElementById('lineage_dropdown_input').value = this.innerText">BA.1</button>
+            <button onclick="document.getElementById('lineage_dropdown_input').value = this.innerText">BA.2.75</button>
+            <button onclick="document.getElementById('lineage_dropdown_input').value = this.innerText">BA.5</button>
+        </div>
+        <div style="display: inline-block">
+            <input list="lineage_dropdown" id="lineage_dropdown_input">
+            <datalist id="lineage_dropdown" />
+        </div>
+        <div style="display: inline-block">
+            <button onclick="get_seq()">Go</button>
+        </div>
+    </div>
+
+    <div class="card">
+        <p>Result</p>
+        <div id="warnings_div"></div>
+        <textarea id="result_textarea" style="width: 100%; height: 30em"></textarea>
+    </div>
+
+</body>
+<script>
+    'use strict';
+
+    async function get_alias_key() {
+        fetch("res/alias_key.json")
+            .then(response => response.json())
+            .then(json => set_alias_key_global(json));
+    }
+
+    async function set_alias_key_global(in_json) {
+        alias_key = in_json
+    }
+
+    function unalias_lineage(input_lineage) {
+        var isWithdrawn = input_lineage[0] == "*"
+        var stem = input_lineage.split(".")[0].replace("*", "")
+        var rest_of_it = input_lineage.split(".").slice(1, input_lineage.split(".").length).join(".")
+
+        rest_of_it = rest_of_it.length ? "." + rest_of_it : ""
+
+        if (alias_key[stem] && (typeof (alias_key[stem]) == "string")) {
+            if (isWithdrawn) {
+                return "*" + alias_key[stem] + rest_of_it
+            }
+            else {
+                return alias_key[stem] + rest_of_it
+            }
+        }
+        else {
+            return input_lineage
+        }
+    }
+
+    function realias_lineage(input_lineage) {
+        var realiased_lineage = input_lineage
+
+        for (var alias in alias_key) {
+            var unaliased = alias_key[alias]
+            if (input_lineage.startsWith(unaliased + ".")) {
+                realiased_lineage = input_lineage.replace(unaliased, alias)
+            }
+        }
+
+        if (input_lineage == realiased_lineage) {
+            return realiased_lineage
+        }
+        else {
+            return realias_lineage(realiased_lineage) // recurse
+        }
+    }
+
+    function get_parent_lineage(input_lineage) {
+        `
+    Returns the parent lineage if there is one
+    Returns false if there isn't
+    Minor caveats documented in the function body
+    `
+        var unaliased = unalias_lineage(input_lineage)
+
+        // we stop if the unaliased lineage doesn't include a period
+        // this should mean we stop at lineage B for all B sublineages
+        // which is where we want to stop. That A exists is irrelevant
+        // should also work for recombinants, stopping at the parent
+        // A sublineages will return A
+        if (!unaliased.includes(".")) {
+            return false
+        }
+
+        else {
+            var unalised_split = unaliased.split(".")
+            var unalised_sliced = unalised_split.slice(0, unalised_split.length - 1)
+            var unalised_joined = unalised_sliced.join(".")
+            return realias_lineage(unalised_joined)
+        }
+    }
+
+    function get_all_lineage_mutations(input_lineage) {
+        // for a given input lineage
+        // we need to get its associated mutations
+        // and those of all its parent lineages
+        // and we sort of have to ensure that the parent
+        // ones don't overwrite the child ones.
+        // that second bit we'll handle in a different function
+        var input_lineage_parent = input_lineage // init
+        var mutation_dict = {}
+        var warnings_array = []
+
+        while (input_lineage_parent) {
+            var lineage_mutations_obj = lineage_mutations_nts[input_lineage_parent]
+
+            // only add if there is something to add
+            // else check the parent
+            if (lineage_mutations_obj) {
+                mutation_dict[unalias_lineage(input_lineage_parent)] = lineage_mutations_obj
+            }
+            else {
+                warnings_array.push(`lineage ${input_lineage_parent} is not defined by any mutations over its parent lineages`)
+            }
+
+            input_lineage_parent = get_parent_lineage(input_lineage_parent)
+        }
+
+        // error if we come back empty handed
+        if (!Object.values(mutation_dict)[0]) {
+            console.error("No mutations found for", input_lineage)
+            return
+        }
+
+        document.getElementById("warnings_div").innerHTML = warnings_array.join("<br>")
+
+        return mutation_dict
+    }
+
+    function get_flat_mutation_seq(input_lineage) {
+        var return_dict = {}
+        var mutation_dict = get_all_lineage_mutations(input_lineage)
+        var sorted_lineage_list = Object.keys(mutation_dict).sort()
+
+        for (var i = 0; i < sorted_lineage_list.length; i++) {
+            var lineage = sorted_lineage_list[i]
+            var lineage_mutation_dict = mutation_dict[lineage] // actually an array of objects
+            for (var j = 0; j < lineage_mutation_dict.length; j++) {
+                var gene = lineage_mutation_dict[j]["gene"]
+                var position = lineage_mutation_dict[j]["pos"].toString()
+                var alt = lineage_mutation_dict[j]["alt"]
+
+                var temp_dict = {}
+                temp_dict[position] = alt
+
+                if (!Object.keys(return_dict).includes(gene)) {
+                    return_dict[gene] = temp_dict
+                }
+                else {
+                    return_dict[gene] = Object.assign(return_dict[gene], temp_dict)
+                }
+            }
+        }
+
+        return_dict = return_dict["nt"]
+
+        var return_string = Object.values(return_dict).join("")
+
+        return return_string
+    }
+
+    function init_lineage_dropdown() {
+        var dropdown_values = Object.keys(lineage_mutations_nts).sort()
+
+        var dropdown_html = dropdown_values.map(x => `<option value='${x}' />`)
+
+        document.getElementById("lineage_dropdown").innerHTML = dropdown_html.join("\n")
+    }
+
+    function get_seq() {
+        var input_lineage = document.getElementById("lineage_dropdown_input").value
+        var seq = get_flat_mutation_seq(input_lineage)
+        var fasta_header = ">" + input_lineage
+        var fasta = fasta_header + "\n" + seq
+
+        document.getElementById("result_textarea").value = fasta
+    }
+
+    // globals
+    var alias_key
+
+    function init() {
+        // init stuff goes here
+        get_alias_key();
+        init_lineage_dropdown();
+    }
+
+    init();
+</script>
+
+</html>
